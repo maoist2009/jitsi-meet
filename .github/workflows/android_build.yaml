@@ -12,12 +12,17 @@ jobs:
     name: Build Android Debug
     runs-on: ubuntu-latest
     env:
-      NODE_VERSION: 20.19.4
+      # 使用Jitsi Meet官方推荐的版本
+      ANDROID_COMPILE_SDK_VERSION: 34
+      ANDROID_BUILD_TOOLS_VERSION: "34.0.0"
+      ANDROID_NDK_VERSION: 25.1.8937393
+      ANDROID_CMAKE_VERSION: 3.22.1
+      NODE_VERSION: 18.x
       JDK_VERSION: 17
       
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v6
+      uses: actions/checkout@v5
       with:
         repository: vishal2005025/jitsi-meet
         ref: feat/android-virtual-output-device-support
@@ -32,56 +37,47 @@ jobs:
         cache: 'gradle'
     
     - name: Set up Android SDK
-      uses: android-actions/setup-android@v4
+      uses: android-actions/setup-android@v3
       with:
-        sdk-versions: '34'
-        build-tools-versions: '34.0.0'
+        sdk-versions: ${{ env.ANDROID_COMPILE_SDK_VERSION }}
+        ndk-versions: ${{ env.ANDROID_NDK_VERSION }}
+        cmake-versions: ${{ env.ANDROID_CMAKE_VERSION }}
+        build-tools-versions: ${{ env.ANDROID_BUILD_TOOLS_VERSION }}
     
     - name: Set up Node.js
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@v4
       with:
         node-version: ${{ env.NODE_VERSION }}
         cache: 'npm'
         cache-dependency-path: package-lock.json
     
-    - name: Install system dependencies
+    - name: Install Ninja Build System
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsecret-1-dev watchman
+        sudo apt-get install -y ninja-build
     
     - name: Install project dependencies
       run: |
+        npm install -g yarn
         npm install --prefer-offline --no-audit
     
     - name: Build Android debug APK
       working-directory: android
       run: |
+        ./gradlew clean
         ./gradlew assembleDebug --stacktrace --info
       env:
         ORG_GRADLE_PROJECT_newArchEnabled: 'false'
     
-    - name: Verify debug APK exists
-      run: |
-        ls -la android/app/build/outputs/apk/debug/
-        if [ ! -f android/app/build/outputs/apk/debug/app-debug.apk ]; then
-          echo "❌ Debug APK not found!"
-          exit 1
-        fi
-        echo "✅ Debug APK built successfully!"
-    
     - name: Upload debug APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: jitsi-meet-android-debug-${{ github.short_sha }}
+        name: jitsi-meet-android-debug-${{ github.sha }}
         path: android/app/build/outputs/apk/debug/app-debug.apk
         retention-days: 7
     
     - name: Display build summary
       run: |
-        echo "🎉 Android debug build completed successfully!"
+        echo "✅ Android debug build completed successfully!"
         echo "📱 APK location: android/app/build/outputs/apk/debug/app-debug.apk"
-        echo "📦 Artifact name: jitsi-meet-android-debug-${{ github.short_sha }}"
-        echo "🔧 Build environment:"
-        echo "   - Node.js Version: $(node -v)"
-        echo "   - npm Version: $(npm -v)"
-        echo "   - Java Version: $(java -version 2>&1)"
+        echo "📦 Artifact name: jitsi-meet-android-debug-${{ github.sha }}"
