@@ -1,0 +1,134 @@
+name: Android Release Build
+
+on:
+  push:
+    branches: [ "feat/android-virtual-output-device-support" ]
+  workflow_dispatch:
+
+jobs:
+  build-android-release:
+    name: Build Android Release
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_COMPILE_SDK_VERSION: 34
+      ANDROID_BUILD_TOOLS_VERSION: "34.0.0"
+      ANDROID_NDK_VERSION: 25.1.8937393
+      ANDROID_CMAKE_VERSION: 3.22.1
+      NODE_VERSION: 18.x
+      JDK_VERSION: 17
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+      with:
+        repository: vishal2005025/jitsi-meet
+        ref: feat/android-virtual-output-device-support
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Set up JDK
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JDK_VERSION }}
+        distribution: 'temurin'
+        cache: 'gradle'
+    
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        sdk-versions: ${{ env.ANDROID_COMPILE_SDK_VERSION }}
+        ndk-versions: ${{ env.ANDROID_NDK_VERSION }}
+        cmake-versions: ${{ env.ANDROID_CMAKE_VERSION }}
+        build-tools-versions: ${{ env.ANDROID_BUILD_TOOLS_VERSION }}
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: package-lock.json
+    
+    - name: Install Ninja Build System
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ninja-build
+    
+    - name: Install project dependencies
+      run: |
+        npm install -g yarn
+        npm install --prefer-offline --no-audit
+    
+    - name: Generate debug keystore (for release build)
+      run: |
+        echo "Generating debug keystore for release build..."
+        keytool -genkeypair -v \
+          -storetype PKCS12 \
+          -keystore android/app/debug.keystore \
+          -alias androiddebugkey \
+          -keypass android \
+          -storepass android \
+          -keyalg RSA \
+          -keysize 2048 \
+          -validity 10000 \
+          -dname "CN=Android Debug,O=Android,C=US"
+        
+        echo "org.gradle.jvmargs=-Xmx4096M" >> android/gradle.properties
+        echo "android.useAndroidX=true" >> android/gradle.properties
+        echo "android.enableJetifier=true" >> android/gradle.properties
+    
+    - name: Configure Gradle properties for release
+      run: |
+        echo "RELEASE_STORE_FILE=debug.keystore" >> android/gradle.properties
+        echo "RELEASE_STORE_PASSWORD=android" >> android/gradle.properties
+        echo "RELEASE_KEY_ALIAS=androiddebugkey" >> android/gradle.properties
+        echo "RELEASE_KEY_PASSWORD=android" >> android/gradle.properties
+    
+    - name: Build Android release APK
+      working-directory: android
+      run: |
+        ./gradlew clean
+        ./gradlew assembleRelease --stacktrace --info
+      env:
+        ORG_GRADLE_PROJECT_newArchEnabled: 'false'
+    
+    - name: Verify release APK exists
+      run: |
+        ls -la android/app/build/outputs/apk/release/
+        if [ ! -f android/app/build/outputs/apk/release/app-release.apk ]; then
+          echo "❌ Release APK not found!"
+          exit 1
+        fi
+        echo "✅ Release APK built successfully!"
+    
+    - name: Upload release APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: jitsi-meet-android-release-${{ github.sha }}
+        path: android/app/build/outputs/apk/release/app-release.apk
+        retention-days: 30
+    
+    - name: Upload release AAB artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: jitsi-meet-android-release-bundle-${{ github.sha }}
+        path: android/app/build/outputs/bundle/release/app-release.aab
+        retention-days: 30
+    
+    - name: Upload mapping files (for debugging)
+      uses: actions/upload-artifact@v4
+      with:
+        name: jitsi-meet-android-release-mapping-${{ github.sha }}
+        path: android/app/build/outputs/mapping/release/
+        retention-days: 30
+    
+    - name: Display build summary
+      run: |
+        echo "🎉 Android release build completed successfully!"
+        echo "📱 APK location: android/app/build/outputs/apk/release/app-release.apk"
+        echo "📦 AAB location: android/app/build/outputs/bundle/release/app-release.aab"
+        echo "📦 Artifact names:"
+        echo "   - jitsi-meet-android-release-${{ github.sha }}"
+        echo "   - jitsi-meet-android-release-bundle-${{ github.sha }}"
+        echo "   - jitsi-meet-android-release-mapping-${{ github.sha }}"
+        echo "⚠️  WARNING: This APK uses a debug keystore and is NOT suitable for production Google Play Store upload."
+        echo "   It's only for testing and internal distribution."
