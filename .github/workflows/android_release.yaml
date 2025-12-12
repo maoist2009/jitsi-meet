@@ -13,7 +13,6 @@ jobs:
       ANDROID_COMPILE_SDK_VERSION: 34
       ANDROID_BUILD_TOOLS_VERSION: "34.0.0"
       ANDROID_NDK_VERSION: 25.1.8937393
-      ANDROID_CMAKE_VERSION: 3.22.1
       NODE_VERSION: 18.x
       JDK_VERSION: 17
       
@@ -24,7 +23,6 @@ jobs:
         repository: vishal2005025/jitsi-meet
         ref: feat/android-virtual-output-device-support
         submodules: recursive
-        fetch-depth: 0
     
     - name: Set up JDK
       uses: actions/setup-java@v4
@@ -38,7 +36,6 @@ jobs:
       with:
         sdk-versions: ${{ env.ANDROID_COMPILE_SDK_VERSION }}
         ndk-versions: ${{ env.ANDROID_NDK_VERSION }}
-        cmake-versions: ${{ env.ANDROID_CMAKE_VERSION }}
         build-tools-versions: ${{ env.ANDROID_BUILD_TOOLS_VERSION }}
     
     - name: Set up Node.js
@@ -46,98 +43,67 @@ jobs:
       with:
         node-version: ${{ env.NODE_VERSION }}
         cache: 'npm'
-        cache-dependency-path: package-lock.json
     
-    - name: Install Ninja Build System
+    - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y ninja-build
+        npm install
     
-    - name: Install project dependencies
+    - name: Verify Android debug keystore location
       run: |
-        npm install -g yarn
-        npm install --prefer-offline --no-audit
+        echo "Checking standard Android debug keystore locations..."
+        ls -la ~/.android/debug.keystore || echo "~/.android/debug.keystore not found"
+        ls -la android/app/debug.keystore || echo "android/app/debug.keystore not found"
+        ls -la android/debug.keystore || echo "android/debug.keystore not found"
     
-    - name: Use debug signing config for release build
+    - name: Build Android release bundle first
       run: |
-        echo "Forcing debug signing config for release build..."
-        cat > android/gradle.properties << EOL
-        org.gradle.jvmargs=-Xmx4096M
-        android.useAndroidX=true
-        android.enableJetifier=true
-        # Use debug signing config for release
-        android.injected.build.signature.debug.keystore=debug.keystore
-        android.injected.build.signature.debug.keystore.path=android/app/debug.keystore
-        android.injected.build.signature.debug.keystore.password=android
-        android.injected.build.signature.debug.key.alias=androiddebugkey
-        android.injected.build.signature.debug.key.password=android
-        EOL
+        npx react-native bundle --platform android --dev false --entry-file index.js \
+          --bundle-output android/app/src/main/assets/index.android.bundle \
+          --assets-dest android/app/src/main/res
+      working-directory: .
     
-    - name: Patch android/app/build.gradle to use debug signing
-      run: |
-        # Backup original file
-        cp android/app/build.gradle android/app/build.gradle.backup
-        
-        # Create new build.gradle with debug signing config for release
-        cat > android/app/build.gradle << EOL
-        $(grep -v 'signingConfigs' android/app/build.gradle.backup | grep -v 'buildTypes')
-        
-        android {
-            signingConfigs {
-                debug {
-                    storeFile file('debug.keystore')
-                    storePassword 'android'
-                    keyAlias 'androiddebugkey'
-                    keyPassword 'android'
-                }
-                release {
-                    storeFile file('debug.keystore')
-                    storePassword 'android'
-                    keyAlias 'androiddebugkey'
-                    keyPassword 'android'
-                }
-            }
-            buildTypes {
-                debug {
-                    signingConfig signingConfigs.debug
-                }
-                release {
-                    signingConfig signingConfigs.release
-                    minifyEnabled enableProguardInReleaseBuilds
-                    proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
-                }
-            }
-        }
-        EOL
-    
-    - name: Build Android release APK
+    - name: Build Android release APK with standard debug signing
       working-directory: android
       run: |
         ./gradlew clean
-        ./gradlew assembleRelease --stacktrace --info
+        ./gradlew assembleRelease --stacktrace --info -Pandroid.injected.build.signature.debug.keystore=~/.android/debug.keystore
       env:
         ORG_GRADLE_PROJECT_newArchEnabled: 'false'
+        # Standard Android debug keystore credentials
+        ANDROID_DEBUG_KEYSTORE: "$HOME/.android/debug.keystore"
+        ANDROID_DEBUG_KEYSTORE_PASSWORD: "android"
+        ANDROID_DEBUG_KEY_ALIAS: "androiddebugkey"
+        ANDROID_DEBUG_KEY_PASSWORD: "android"
     
-    - name: Verify release APK exists
+    - name: Find and verify release APK
+      id: find-apk
       run: |
-        ls -la android/app/build/outputs/apk/release/
-        if [ ! -f android/app/build/outputs/apk/release/app-release.apk ]; then
-          echo "❌ Release APK not found!"
+        echo "Searching for release APK..."
+        APK_PATH=$(find android -name "app-release*.apk" -print -quit)
+        if [ -z "$APK_PATH" ]; then
+          echo "❌ No release APK found!"
+          find android -name "*.apk" -ls
           exit 1
         fi
-        echo "✅ Release APK built successfully!"
+        echo "✅ Found APK at: $APK_PATH"
+        echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+        ls -la "$APK_PATH"
     
     - name: Upload release APK artifact
       uses: actions/upload-artifact@v4
       with:
         name: jitsi-meet-android-release-${{ github.sha }}
-        path: android/app/build/outputs/apk/release/app-release.apk
+        path: ${{ steps.find-apk.outputs.apk_path }}
         retention-days: 30
     
     - name: Display build summary
       run: |
         echo "🎉 Android release build completed successfully!"
-        echo "📱 APK location: android/app/build/outputs/apk/release/app-release.apk"
-        echo "📦 Artifact name: jitsi-meet-android-release-${{ github.sha }}"
-        echo "⚠️  WARNING: This APK uses debug signing and is for testing/internal use only."
-        echo "   DO NOT publish to Google Play Store with this signing configuration."
+        echo "📱 APK location: ${{ steps.find-apk.outputs.apk_path }}"
+        echo "📦 Artifact: jitsi-meet-android-release-${{ github.sha }}"
+        echo "✅ This is a TRUE release build with:"
+        echo "   - JS bundle packaged inside APK"
+        echo "   - No development server dependency"
+        echo "   - Optimized JavaScript code"
+        echo "   - Can be used offline"
+        echo "⚠️  Note: Uses standard debug signing for testing only"
