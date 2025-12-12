@@ -58,30 +58,57 @@ jobs:
         npm install -g yarn
         npm install --prefer-offline --no-audit
     
-    - name: Generate debug keystore (for release build)
+    - name: Use debug signing config for release build
       run: |
-        echo "Generating debug keystore for release build..."
-        keytool -genkeypair -v \
-          -storetype PKCS12 \
-          -keystore android/app/debug.keystore \
-          -alias androiddebugkey \
-          -keypass android \
-          -storepass android \
-          -keyalg RSA \
-          -keysize 2048 \
-          -validity 10000 \
-          -dname "CN=Android Debug,O=Android,C=US"
-        
-        echo "org.gradle.jvmargs=-Xmx4096M" >> android/gradle.properties
-        echo "android.useAndroidX=true" >> android/gradle.properties
-        echo "android.enableJetifier=true" >> android/gradle.properties
+        echo "Forcing debug signing config for release build..."
+        cat > android/gradle.properties << EOL
+        org.gradle.jvmargs=-Xmx4096M
+        android.useAndroidX=true
+        android.enableJetifier=true
+        # Use debug signing config for release
+        android.injected.build.signature.debug.keystore=debug.keystore
+        android.injected.build.signature.debug.keystore.path=android/app/debug.keystore
+        android.injected.build.signature.debug.keystore.password=android
+        android.injected.build.signature.debug.key.alias=androiddebugkey
+        android.injected.build.signature.debug.key.password=android
+        EOL
     
-    - name: Configure Gradle properties for release
+    - name: Patch android/app/build.gradle to use debug signing
       run: |
-        echo "RELEASE_STORE_FILE=debug.keystore" >> android/gradle.properties
-        echo "RELEASE_STORE_PASSWORD=android" >> android/gradle.properties
-        echo "RELEASE_KEY_ALIAS=androiddebugkey" >> android/gradle.properties
-        echo "RELEASE_KEY_PASSWORD=android" >> android/gradle.properties
+        # Backup original file
+        cp android/app/build.gradle android/app/build.gradle.backup
+        
+        # Create new build.gradle with debug signing config for release
+        cat > android/app/build.gradle << EOL
+        $(grep -v 'signingConfigs' android/app/build.gradle.backup | grep -v 'buildTypes')
+        
+        android {
+            signingConfigs {
+                debug {
+                    storeFile file('debug.keystore')
+                    storePassword 'android'
+                    keyAlias 'androiddebugkey'
+                    keyPassword 'android'
+                }
+                release {
+                    storeFile file('debug.keystore')
+                    storePassword 'android'
+                    keyAlias 'androiddebugkey'
+                    keyPassword 'android'
+                }
+            }
+            buildTypes {
+                debug {
+                    signingConfig signingConfigs.debug
+                }
+                release {
+                    signingConfig signingConfigs.release
+                    minifyEnabled enableProguardInReleaseBuilds
+                    proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+                }
+            }
+        }
+        EOL
     
     - name: Build Android release APK
       working-directory: android
@@ -107,28 +134,10 @@ jobs:
         path: android/app/build/outputs/apk/release/app-release.apk
         retention-days: 30
     
-    - name: Upload release AAB artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: jitsi-meet-android-release-bundle-${{ github.sha }}
-        path: android/app/build/outputs/bundle/release/app-release.aab
-        retention-days: 30
-    
-    - name: Upload mapping files (for debugging)
-      uses: actions/upload-artifact@v4
-      with:
-        name: jitsi-meet-android-release-mapping-${{ github.sha }}
-        path: android/app/build/outputs/mapping/release/
-        retention-days: 30
-    
     - name: Display build summary
       run: |
         echo "🎉 Android release build completed successfully!"
         echo "📱 APK location: android/app/build/outputs/apk/release/app-release.apk"
-        echo "📦 AAB location: android/app/build/outputs/bundle/release/app-release.aab"
-        echo "📦 Artifact names:"
-        echo "   - jitsi-meet-android-release-${{ github.sha }}"
-        echo "   - jitsi-meet-android-release-bundle-${{ github.sha }}"
-        echo "   - jitsi-meet-android-release-mapping-${{ github.sha }}"
-        echo "⚠️  WARNING: This APK uses a debug keystore and is NOT suitable for production Google Play Store upload."
-        echo "   It's only for testing and internal distribution."
+        echo "📦 Artifact name: jitsi-meet-android-release-${{ github.sha }}"
+        echo "⚠️  WARNING: This APK uses debug signing and is for testing/internal use only."
+        echo "   DO NOT publish to Google Play Store with this signing configuration."
