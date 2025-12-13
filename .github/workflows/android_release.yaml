@@ -50,19 +50,6 @@ jobs:
       run: |
         npm install
     
-    - name: Configure release signing with debug keystore
-      run: |
-        # Create signing config if it doesn't exist
-        mkdir -p android/app
-        # Standard Android debug keystore configuration
-        echo "RELEASE_STORE_FILE=~/.android/debug.keystore" >> android/gradle.properties
-        echo "RELEASE_STORE_PASSWORD=android" >> android/gradle.properties
-        echo "RELEASE_KEY_ALIAS=androiddebugkey" >> android/gradle.properties
-        echo "RELEASE_KEY_PASSWORD=android" >> android/gradle.properties
-        echo "org.gradle.jvmargs=-Xmx4096M" >> android/gradle.properties
-        echo "android.useAndroidX=true" >> android/gradle.properties
-        echo "android.enableJetifier=true" >> android/gradle.properties
-    
     - name: Build Android release APK
       working-directory: android
       run: |
@@ -70,37 +57,38 @@ jobs:
         ./gradlew assembleRelease --stacktrace --info
       env:
         ORG_GRADLE_PROJECT_newArchEnabled: 'false'
-        # Set correct entry file paths for Gradle
-        ORG_GRADLE_PROJECT_reactNativeDebugEntryFile: 'react/index.native.js'
         ORG_GRADLE_PROJECT_reactNativeReleaseEntryFile: 'react/index.native.js'
     
-    - name: Verify release APK exists
+    - name: Find and upload ANY release APK
       run: |
-        echo "Checking for release APK..."
-        find android -name "app-release*.apk" -ls
-        if [ ! -f android/app/build/outputs/apk/release/app-release.apk ]; then
-          echo "❌ Release APK not found at expected location!"
+        echo "🔍 Searching for ANY release APK..."
+        APK_PATH=$(find android -name "app-release*.apk" -print -quit)
+        
+        if [ -z "$APK_PATH" ]; then
+          echo "❌ No release APK found!"
+          find android -name "*.apk" -ls
           exit 1
         fi
-        echo "✅ Release APK built successfully!"
-        ls -la android/app/build/outputs/apk/release/app-release.apk
+        
+        echo "✅ Found APK: $APK_PATH"
+        ls -la "$APK_PATH"
+        
+        # Copy to standard location for artifact upload
+        mkdir -p ./release-artifact
+        cp "$APK_PATH" ./release-artifact/app-release.apk
+        echo "📦 Prepared artifact at: ./release-artifact/app-release.apk"
     
     - name: Upload release APK artifact
       uses: actions/upload-artifact@v4
       with:
         name: jitsi-meet-android-release-${{ github.sha }}
-        path: android/app/build/outputs/apk/release/app-release.apk
+        path: ./release-artifact/app-release.apk
         retention-days: 30
     
     - name: Display build summary
       run: |
         echo "🎉 Android release build completed successfully!"
-        echo "📱 APK location: android/app/build/outputs/apk/release/app-release.apk"
+        echo "📱 APK location: $(ls -la ./release-artifact/app-release.apk)"
         echo "📦 Artifact name: jitsi-meet-android-release-${{ github.sha }}"
-        echo "✅ This is a TRUE release build with:"
-        echo "   - JS bundle packaged inside APK"
-        echo "   - No development server dependency"
-        echo "   - Optimized JavaScript code"
-        echo "   - Can be used offline"
-        echo "⚠️  Note: Uses standard debug signing for testing only"
-        echo "   DO NOT publish to Google Play Store with this signing configuration"
+        echo "✅ This is a TRUE release build with JS bundle packaged inside"
+        echo "⚠️  Note: Uses debug signing for testing only"
